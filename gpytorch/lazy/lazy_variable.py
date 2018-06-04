@@ -15,6 +15,50 @@ from .lazy_variable_representation_tree import LazyVariableRepresentationTree
 
 
 class LazyVariable(object):
+    """
+    Base class for LazyVariables in GPyTorch.
+
+    In GPyTorch, nearly all covariance matrices for Gaussian processes are handled internally as some variety of
+    LazyVariable. A LazyVariable is an object that represents a tensor object, similar to :class:`torch.tensor`, but
+    typically differs in two ways:
+
+    #. A tensor represented by a LazyVariable can typically be represented more efficiently than storing a full matrix.
+       For example, a LazyVariable representing :math:`K=XX^{\top}` where :math:`K` is :math:`n \times n` but
+       :math:`X` is :math:`n \times d` might store :math:`X` instead of :math:`K` directly.
+    #. A LazyVariable typically defines a matmul routine that performs :math:`KM` that is more efficient than storing
+       the full matrix. Using the above example, performing :math:`KM=X(X^{\top}M)` requires only :math:`O(nd)` time,
+       rather than the :math:`O(n^2)` time required if we were storing :math:`K` directly.
+
+    In order to define a new LazyVariable class that can be used as a covariance matrix in GPyTorch, a user must define
+    at a minimum the following methods (in each example, :math:`K` denotes the matrix that the LazyVariable represents)
+
+    * :func:`~gpytorch.lazy.LazyVariable._matmul`, which performs a matrix multiplication :math:`KM`
+    * :func:`~gpytorch.lazy.LazyVariable._quad_form_derivative`, which computes a quadratic form with the derivative,
+      :math:`\mathbf{v}^{\top}\frac{dK}{dR}\mathbf{v}`, where :math:`R` denotes the actual tensors used to represent
+      :math:`K`. In the linear kernel example, :math:`K=XX^{\top}`, this would be :math:`\frac{dK}{dX}`. If :math:`K`
+      is a Toeplitz matrix (see :class:`gpytorch.lazy.ToeplitzLazyVariable`) represented by its first column
+      :math:`\mathbf{c}`, this would return :math:`\mathbf{v}^{\top}\frac{dK}{d\mathbf{c}}\mathbf{v}`.
+    * :func:`~gpytorch.lazy.LazyVariable._size`, which returns a :class:`torch.Size` containing the dimensions of
+      :math:`K`.
+
+    In addition to these, a LazyVariable may need to define the :func:`~gpytorch.lazy.LazyVariable._transpose_nonbatch`,
+    :func:`~gpytorch.lazy.LazyVariable._get_indices`, and :func:`~gpytorch.lazy.LazyVariable._batch_get_indices`
+    functions in special cases. See the documentation for these methods for details.
+
+    ..note::
+        The base LazyVariable class provides default implementations of many other operations in order to mimic the
+        behavior of a standard tensor as closely as possible. For example, we provide default implementations of
+        :func:`~gpytorch.lazy.LazyVariable.__getitem__`, :func:`~gpytorch.lazy.LazyVariable.__add__`, etc that either
+        make use of other lazy variables or exploit the functions that **must** be defined above.
+
+        While these implementations are provided for convenience, it is advisable in many cases to override them for the
+        sake of efficiency.
+
+    ..note::
+        LazyVariables are designed by default to optionally represent batches of matrices. Thus, the size of a
+        LazyVariable may be (for example) :math:`b \times n \times n`. Many of the methods are designed to efficiently
+        operate on these batches if present.
+    """
     def __init__(self, *args, **kwargs):
         self._args = args
         self._kwargs = kwargs
@@ -32,8 +76,8 @@ class LazyVariable(object):
         (Optional) define a preconditioner (P) for linear conjugate gradients
 
         Returns:
-        - precond_fn (function) - a function on x which performs P^{-1}(x)
-        - predond_log_det (scalar) - the log determinant of P
+            function: a function on x which performs P^{-1}(x)
+            scalar: the log determinant of P
         """
         return None, None
 
@@ -48,7 +92,7 @@ class LazyVariable(object):
         Defaults to calling the exact diagonal function
 
         Returns:
-        - diag (tensor) - the diagonal (or batch of diagonals)
+            tensor: - the diagonal (or batch of diagonals)
         """
         return self.diag()
 
@@ -60,8 +104,8 @@ class LazyVariable(object):
         Implementing this is not necessary, but it improves performance
 
         Args:
-            - row_index (slice or LongTensor) - index over rows
-            - col_index (slice or LongTensor) - index over columns
+            row_index (slice or LongTensor): index over rows
+            col_index (slice or LongTensor): index over columns
         """
         from .interpolated_lazy_variable import InterpolatedLazyVariable
 
@@ -99,15 +143,28 @@ class LazyVariable(object):
 
     def _matmul(self, rhs):
         """
-        Returns: matrix * rhs
+        Performs a matrix multiplication :math:`KM` with the matrix :math:`K` that this LazyVariable represents. Should
+        behave as :func:`torch.matmul`. If the LazyVariable represents a batch of matrices, this method should therefore
+        operate in batch mode as well.
+
+        Args:
+            rhs (:obj:`torch.tensor`): the matrix :math:`M` to multiply with.
+
+        Returns:
+            :obj:`torch.tensor`: matrix * rhs
         """
         raise NotImplementedError("The class %s requires a _matmul function!" % self.__class__.__name__)
 
     def _t_matmul(self, rhs):
         """
-        Returns: matrix^T * rhs
+        Performs a transpose matrix multiplication :math:`K^{\top}M` with the matrix :math:`K` that this
+        LazyVariable represents.
 
-        Implementing this is not necessary, but it improves performance
+        Args:
+            rhs (:obj:`torch.tensor`): the matrix :math:`M` to multiply with.
+
+        Returns:
+            :obj:`torch.tensor`: matrix * rhs
         """
         return self.transpose(-1, -2)._matmul(rhs)
 
@@ -116,7 +173,9 @@ class LazyVariable(object):
         Given u (left_vecs) and v (right_vecs),
         Computes the derivatives of (u^t K v) w.r.t. K
 
-        Returns: derivative w.r.t. the arguments
+        Returns:
+            :obj:`torch.tensor`: derivative with respect to the arguments that are actually used to represent this
+                                   this LazyVariable.
         """
         raise NotImplementedError("The class %s requires a _quad_form_derivative function!" % self.__class__.__name__)
 
@@ -126,6 +185,9 @@ class LazyVariable(object):
 
         Implement this method, rather than size().
         This is because size does some additional work
+
+        Returns:
+            :obj:`torch.Size`: The size of the matrix :math:`K` represented by this LazyVariable
         """
         raise NotImplementedError("The class %s requires a _size function!" % self.__class__.__name__)
 
@@ -190,6 +252,10 @@ class LazyVariable(object):
         return self.add_diag(diag)
 
     def cpu(self):
+        """
+        Returns:
+            :obj:`gpytorch.lazy.LazyVariable`: a new LazyVariable identical to ``self``, but on the CPU.
+        """
         new_args = []
         new_kwargs = {}
         for arg in self._args:
@@ -205,6 +271,14 @@ class LazyVariable(object):
         return self.__class__(*new_args, **new_kwargs)
 
     def cuda(self, device_id=None):
+        """
+        This method operates identically to :func:`torch.nn.Module.cuda`.
+
+        Args:
+            device_id (:obj:`str`, optional): Device ID of GPU to use.
+        Returns:
+            :obj:`gpytorch.lazy.LazyVariable`: a new LazyVariable identical to ``self``, but on the GPU.
+        """
         new_args = []
         new_kwargs = {}
         for arg in self._args:
@@ -220,6 +294,14 @@ class LazyVariable(object):
         return self.__class__(*new_args, **new_kwargs)
 
     def diag(self):
+        """
+        As :func:`torch.diag`, returns the diagonal of the matrix :math:`K` this LazyVariable represents as a vector.
+
+        Returns:
+            :obj:`torch.tensor`: The diagonal of :math:`K`. If :math:`K` is :math:`n \times n`, this will be a length
+            n vector. If this LazyVariable represents a batch (e.g., is :math:`b \times n \times n`), this will be a
+            :math:`b \times n` matrix of diagonals, one for each matrix in the batch.
+        """
         size = self.size()
         if size[-1] != size[-2]:
             raise RuntimeError("Diag works on square matrices (or batches)")
@@ -464,7 +546,7 @@ class LazyVariable(object):
         Instead, overwrite inv_quad_log_det
 
         Returns:
-            - scalar - log determinant
+            - scalar: log determinant
         """
         _, res = self.inv_quad_log_det(inv_quad_rhs=None, log_det=True)
         return res
@@ -474,7 +556,7 @@ class LazyVariable(object):
         Multiplies self by a matrix
 
         Args:
-            - tensor (matrix nxk) - Matrix or vector to multiply with
+            :obj:`torch.tensor`: - Matrix or vector to multiply with
 
         Returns:
             - tensor
