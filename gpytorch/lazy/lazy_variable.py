@@ -147,6 +147,11 @@ class LazyVariable(object):
         behave as :func:`torch.matmul`. If the LazyVariable represents a batch of matrices, this method should therefore
         operate in batch mode as well.
 
+        ..note::
+            This method is intended to be used only internally by various Functions that support backpropagation
+            (e.g., :class:`gpytorch.functions.Matmul`). Once this method is defined, it is strongly recommended that
+            one use :func:`~gpytorch.lazy.LazyVariable.matmul` instead, which makes use of this method properly.
+
         Args:
             rhs (:obj:`torch.tensor`): the matrix :math:`M` to multiply with.
 
@@ -173,6 +178,11 @@ class LazyVariable(object):
         Given u (left_vecs) and v (right_vecs),
         Computes the derivatives of (u^t K v) w.r.t. K
 
+        ..note::
+            This method is intended to be used only internally by various Functions that support backpropagation.
+            For example, this method is used internally by :func:`~gpytorch.lazy.LazyVariable.inv_quad_log_det`. It is
+            not likely that users will need to call this method directly.
+
         Returns:
             :obj:`torch.tensor`: derivative with respect to the arguments that are actually used to represent this
                                    this LazyVariable.
@@ -181,10 +191,11 @@ class LazyVariable(object):
 
     def _size(self):
         """
-        Returns the size of the resulting Variable that the lazy variable represents
+        Returns the size of the resulting Variable that the lazy variable represents.
 
-        Implement this method, rather than size().
-        This is because size does some additional work
+        ..note::
+            This method is used internally by the related function :func:`~gpytorch.lazy.LazyVariable.size`, which does
+            some additional work. Calling this method directly is discouraged.
 
         Returns:
             :obj:`torch.Size`: The size of the matrix :math:`K` represented by this LazyVariable
@@ -362,13 +373,13 @@ class LazyVariable(object):
         [ K_XX, K_XX*; K_X*X, K_X*X* ]
 
         Args:
-        - full_mean (n + t) - the training and test prior means, stacked on top of each other
-        - train_labels (n) - the training labels minus the training prior mean
-        - noise (1) - the observed noise (from the likelihood)
-        - precomputed_cache - speeds up subsequent computations (default: None)
+            full_mean (:obj:`torch.tensor`): the training and test prior means, stacked on top of each other
+            train_labels (:obj:`torch.tensor`): the training labels minus the training prior mean
+            noise (:obj:`torch.tensor`): the observed noise (from the likelihood)
+            precomputed_cache (optional): speeds up subsequent computations (default: None)
 
         Returns:
-        - (t) - the predictive posterior mean of the test points
+            :obj:`torch.tensor`: The predictive posterior mean of the test points
         """
         n_train = train_labels.size(0)
         if precomputed_cache is None:
@@ -383,14 +394,15 @@ class LazyVariable(object):
 
     def _exact_predictive_covar_inv_quad_form_cache(self, train_train_covar_inv_root, test_train_covar):
         """
-        Computes a cache for K_X*X (K_XX + sigma^2 I)^-1 K_X*X
+        Computes a cache for K_X*X (K_XX + sigma^2 I)^-1 K_X*X if possible. By default, this does no work and returns
+        the first argument.
 
         Args:
-        - train_train_covar_inv_root (n x k) - a root of (K_XX + sigma^2 I)^-1
-        - test_train_covar (m x n) - the observed noise (from the likelihood)
+            train_train_covar_inv_root (:obj:`torch.tensor`): a root of (K_XX + sigma^2 I)^-1
+            test_train_covar (:obj:`torch.tensor`): the observed noise (from the likelihood)
 
         Returns
-        - A precomputed cache
+            - A precomputed cache
         """
         return train_train_covar_inv_root
 
@@ -400,11 +412,11 @@ class LazyVariable(object):
         Where S is a tensor such that S S^T = (K_XX + sigma^2 I)^-1
 
         Args:
-        - precomputed_cache - what was computed in _exact_predictive_covar_inv_quad_form_cache
-        - test_train_covar (m x n) - the observed noise (from the likelihood)
+            precomputed_cache (:obj:`torch.tensor`): What was computed in _exact_predictive_covar_inv_quad_form_cache
+            test_train_covar (:obj:`torch.tensor`): The observed noise (from the likelihood)
 
         Returns
-        - LazyVariable (m x k) - K_X^*X S
+            :obj:`gpytorch.lazy.LazyVariable`: K_X^*X S
         """
         # Here the precomputed cache represents S,
         # where S S^T = (K_XX + sigma^2 I)^-1
@@ -417,12 +429,13 @@ class LazyVariable(object):
         [ K_XX, K_XX*; K_X*X, K_X*X* ]
 
         Args:
-        - n_train (int) - how many training points are there in the full covariance matrix
-        - noise (1) - the observed noise (from the likelihood)
-        - precomputed_cache - speeds up subsequent computations (default: None)
+            n_train (int): The number of training points in the full covariance matrix
+            noise (scalar): The observed noise (from the likelihood)
+            precomputed_cache (optional): speeds up subsequent computations (default: None)
 
         Returns:
-        - LazyVariable (t x t) - the predictive posterior covariance of the test points
+            :obj:`gpytorch.lazy.LazyVariable`: A LazyVariable representing the predictive posterior covariance of the
+                                               test points
         """
         if self.ndimension() == 3:
             train_train_covar = self[:, :n_train, :n_train].add_diag(noise)
@@ -556,10 +569,13 @@ class LazyVariable(object):
         Multiplies self by a matrix
 
         Args:
-            :obj:`torch.tensor`: - Matrix or vector to multiply with
+            tensor (:obj:`torch.tensor`): Matrix or vector to multiply with. Must be a proper `:obj:`torch.tensor`,
+            and not another :obj:`gpytorch.lazy.LazyVariable`.
 
         Returns:
-            - tensor
+            :obj:`torch.tensor`: Tensor containing the result of the matrix multiplication :math:`KM`, where :math:`K`
+            is the matrix that this :obj:`gpytorch.lazy.LazyVariable` represents, and :math:`M` is the matrix input
+            to this method.
         """
 
         # Work out batch dimension, if necessary
@@ -578,6 +594,15 @@ class LazyVariable(object):
     def mul(self, other):
         """
         Multiplies the matrix by a constant, or elementwise the matrix by another matrix
+
+        Args:
+            other (:obj:`torch.tensor` or :obj:`~gpytorch.lazy.LazyVariable`): constant or matrix to elementwise
+            multiply by.
+
+        Returns:
+            :obj:`gpytorch.lazy.LazyVariable`: Another lazy variable representing the result of the multiplication. if
+            other was a constant, this will likely be a :obj:`gpytorch.lazy.ConstantMulLazyVariable`. If other was
+            another matrix, this will likely be a :obj:`gpytorch.lazy.MulLazyVariable`.
         """
         if not (isinstance(other, Variable) or isinstance(other, LazyVariable)) or (
             isinstance(other, Variable) and other.numel() == 1
@@ -592,6 +617,9 @@ class LazyVariable(object):
 
     def mul_batch(self, mul_batch_size=None):
         """
+        If this :obj:`gpytorch.lazy.LazyVariable` represents a batch tensor (e.g., one that is
+        :math:`b \times n \times m`), returns a new :obj:`gpytorch.lazy.MulLazyVariable` that represents the result of
+        elementwise multiplying across the batch dimension.
         """
         from .mul_lazy_variable import MulLazyVariable
         from .root_lazy_variable import RootLazyVariable
@@ -657,6 +685,12 @@ class LazyVariable(object):
         return tuple(representation)
 
     def representation_tree(self):
+        """
+        Returns a `:obj:gpytorch.lazy.LazyVariableRepresentationTree` tree object that recursively encodes the
+        representation of this lazy variable. In particular, if the definition of this lazy variable depends on other
+        lazy variables, the tree is an object that can be used to reconstruct the full structure of this lazy variable,
+        including all subobjects. This is used internally.
+        """
         return LazyVariableRepresentationTree(self)
 
     def root_decomposition(self):
@@ -808,10 +842,10 @@ class LazyVariable(object):
         Self should be symmetric, either (batch_size x n_dim x n_dim) or (n_dim x n_dim)
 
         Args:
-        - n_samples: (int)
+            n_samples (int): Number of samples to draw.
 
         Returns:
-        - Samples from MVN (batch_size x n_samples)
+            :obj:`torch.tensor`: Samples from MVN (batch_size x n_samples)
         """
         covar_root = self.root_decomposition()
         if self.ndimension() == 3:
@@ -822,6 +856,17 @@ class LazyVariable(object):
         return samples
 
     def __add__(self, other):
+        """
+        Return a :obj:`gpytorch.lazy.LazyVariable` that represents the sum of this lazy variable and another matrix
+        or lazy variable.
+
+        Args:
+            other (:obj:`torch.tensor` or :obj:`gpytorch.lazy.LazyVariable`): Matrix to add to this one.
+
+        Returns:
+            :obj:`gpytorch.lazy.SumLazyVariable`: A sum lazy variable representing the sum of this lazy variable and
+            other.
+        """
         from .sum_lazy_variable import SumLazyVariable
         from .zero_lazy_variable import ZeroLazyVariable
 
@@ -831,6 +876,16 @@ class LazyVariable(object):
         return SumLazyVariable(self, other)
 
     def __div__(self, other):
+        """
+        Return a :obj:`gpytorch.lazy.LazyVariable` that represents the product of this lazy variable and
+        the elementwise reciprocal of another matrix or lazy variable.
+
+        Args:
+            other (:obj:`torch.tensor` or :obj:`gpytorch.lazy.LazyVariable`): Matrix to divide this one by.
+
+        Returns:
+            :obj:`gpytorch.lazy.MulLazyVariable`: Result of division.
+        """
         from .zero_lazy_variable import ZeroLazyVariable
 
         if isinstance(other, ZeroLazyVariable):
@@ -839,6 +894,10 @@ class LazyVariable(object):
         return self.mul(1. / other)
 
     def __mul__(self, other):
+        """
+        Convenience alias of :func:`~gpytorch.lazy.LazyVariable.mul` that allows the standard product operator to be
+        used.
+        """
         from .zero_lazy_variable import ZeroLazyVariable
 
         if isinstance(other, ZeroLazyVariable):
@@ -847,6 +906,10 @@ class LazyVariable(object):
         return self.mul(other)
 
     def __getitem__(self, index):
+        """
+        Supports subindexing of the matrix this LazyVariable represents. This may return either another
+        :obj:`gpytorch.lazy.LazyVariable` or a :obj:`torch.tensor` depending on the exact implementation.
+        """
         index = list(index) if isinstance(index, tuple) else [index]
         ndimension = self.ndimension()
         index += [slice(None, None, None)] * (ndimension - len(index))
